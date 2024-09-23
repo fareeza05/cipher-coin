@@ -1,68 +1,112 @@
-// Imports
-const { v4: uuidv4 } = require('uuid');
-import * as crypto from 'crypto';
+import {Block} from './block';
+import crypto from 'crypto';
+import {broadcastLatest} from './p2p';
 
+const genesisBlock: Block = new Block(0, 1465154705, 'my genesis block', '', '816534932c2b7154836da6afc367695e6337db8a921823784c14378abed4f7d7');
+let blockchain: Block[] = [genesisBlock];
 
-/**
- * This is the Block class
- * @constructor This intializes properties
- * @index This is the position of the block in the blockchain
- * @timestamp This is the time the block was created
- * @data This is the actual data we want to store
- * @previousHash This is the hash of the previous block to maintain chain
- * @hash This is the hash of the current block
- */
-class Block{
-    constructor( 
-        public index: number, 
-        public timestamp: Date,
-        public data: any,
-        public previousHash: string,
-        public hash: string,
+export class Blockchain{
 
-    ){}
-}
-
-/**
- * This is the blockchain class
- * @Properties Chain: An array that stores all the blocks in the blockchain
- * @Constructor Initializes blockchain by creating genesis block
- * @createGenesisBlock Creates first block with index 0, timestamp, data, and prev hash of 0
- * @calculateHash Uses crypto library (built-in) to create a sha256 hash
- * @addBlock Adds new block to blockchain
- * @getChain Returns current state of blockchain, allowing user to see all blocks
- * 
- */
-class Blockchain {
-    chain: Block[];
-
-    constructor() {
-        this.chain = [this.createGenesisBlock()];
+    calculateHash(index: number, timestamp: number, data: string, previousHash: string): string {
+        var hashInput: string = index.toString() + timestamp.toString() + data + previousHash;
+        return crypto.createHash('sha256').update(hashInput).digest('hex')
     }
 
-    private createGenesisBlock(): Block {
-        return new Block(0, new Date(), "Genesis Block","0", this.calculateHash(0, new Date(), "Genesis Block", "0"));
-    }
-
-    private calculateHash(index: number, timestamp:Date, data:any, previousHash: string) : string {
-        // What is happening here?
-        return crypto.createHash('sha256').update(index.toString() + timestamp.toISOString() + JSON.stringify(data) + previousHash).digest('hex');
-    }
-
-    public addBlock(data: any) : void {
-        const index = this.chain.length;
-        const previousHash = this.chain[index-1].hash;
-        const timestamp = new Date();
-        const hash = this.calculateHash(index, timestamp, data, previousHash);
-        const newBlock = new Block(index, timestamp, data, previousHash, hash);
-
-        this.chain.push(newBlock);
-
+    getLatestBlock(): Block {
+        return blockchain[blockchain.length-1];
 
     }
 
-    public getChain() : Block[] {
-        return this.chain;
+    getBlockChain(): Block[] {
+        return blockchain;
     }
 
+    generateNextBlock(blockData: string) : Block {
+        const previousBlock: Block = this.getLatestBlock();
+        const nextIndex: number = previousBlock.index + 1;
+        const nextTimeStamp: number = new Date().getTime() / 1000;
+        const nextHash: string = this.calculateHash(nextIndex, nextTimeStamp, blockData, previousBlock.hash);
+        const newBlock: Block = new Block(nextIndex, nextTimeStamp, blockData, previousBlock.hash, nextHash);
+        this.addBlock(newBlock);
+        broadcastLatest();
+        return newBlock;
+    }
+
+    calculateBlockHash(block: Block): string {
+        return this.calculateHash(block.index, block.timestamp,block.data, block.previousHash);
+
+    }
+
+    addBlock(newBlock: Block) {
+        if(this.isValidBlock(newBlock, this.getLatestBlock())) {
+            blockchain.push(newBlock);
+        }
+
+    }
+
+    isValidBlockStructure(block: Block): boolean {
+        return typeof block.index === 'number'
+        && typeof block.hash === 'string'
+        && typeof block.previousHash === 'string'
+        && typeof block.timestamp === 'number'
+        && typeof block.data === 'string';
+    
+    }
+
+    isValidBlock(newBlock: Block, prevBlock: Block): boolean {
+        if(!this.isValidBlockStructure(newBlock)) {
+            console.log('Invalid structure');
+            return false;
+        }
+        if (prevBlock.index +1 !== newBlock.index){
+            console.log('invalid index');
+            return false;
+        } else if (prevBlock.hash != newBlock.previousHash) {
+            console.log('invalid previous hash');
+            return false;
+        } else if (this.calculateBlockHash(newBlock) !== newBlock.hash) {
+            console.log('invalid hash for current block');
+            return false
+        }
+        return true;
+
+    }
+
+    isValidGenesis(block: Block): boolean {
+        return JSON.stringify(block) == JSON.stringify(genesisBlock);
+    }
+
+    isValidChain(blockchain : Block[]): boolean {
+        if (!this.isValidGenesis(blockchain[0])){
+            return false;
+        }
+
+        for(let i =1; i<blockchain.length; i++){
+            if(!this.isValidBlock(blockchain[i], blockchain[i-1])){
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    addBlockToChain(newBlock: Block): boolean{
+        if(this.isValidBlock(newBlock, this.getLatestBlock())){
+            blockchain.push(newBlock);
+            return true;
+        }
+
+        return false;
+    }
+
+    replaceChain(newBlocks: Block[]){
+        if(this.isValidChain(newBlocks) && newBlocks.length > this.getBlockChain().length){
+            console.log('Received blockchain is valid. Replacing current blockchain with received blockchain');
+            blockchain = newBlocks;
+            broadcastLatest();
+        } else {
+            console.log('Received block invalid');
+        }
+        
+    }
 }
